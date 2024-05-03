@@ -1,0 +1,129 @@
+---
+title: "milestone3"
+author: "Frank Guo"
+date: "2024-05-03"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Milestone 3 - Crashes Analysis
+### By Xiaodong Guo
+
+## 1. Goal.   
+
+Our project has a significant objective- to construct models identifying the pivotal factors contributing to severe crashes. This crucial task is based on the data provided by the New Zealand Transport Agency(NZTA).    
+
+
+## 2. Data Source.   
+
+The original data, meticulously collected, originated from the Waka Kotahi NZ Transport Agency's open data portal(the tutor provided the link in the assignment piece). We specifically downloaded the dataset named  “Crash Analysis System (CAS) data” from the “Crash” catalogue, which encompasses all traffic crashes reported to us by the NZ Police. The data format is a “CVS” file. It was created on 3/25/2020 and last updated on 3/14/2024.    
+
+The data includes crash datas from 2000 to 2023.
+
+## 3. Data Processing.   
+
+
+```{r echo=TRUE,cache=TRUE}
+#load data
+
+library(tidyverse)
+library(xgboost)
+
+#file_path <- file.choose()
+set.seed(230)
+data <- read.csv("../data/Crash_Analysis_System_(CAS)_data.csv", header = TRUE, sep = ",")
+
+dim(data)
+#glimpse(data)
+
+```
+
+We load the data from csv flie. The dataset we got have 72 columns,and 821744 rows.
+
+
+
+
+
+
+The whole dataset looks categorical.So we convert all attributes in to categorical attributes. 
+
+
+The first things we can do is to drop columns not related to our objective.Thus, we select following columns by common sense of mine(not sure if 100% correct,maybe need some hint from Lisa Chen).There are also have some description columns, that is long string values to desript an event or street name. That looks no sense,should drop them too. Like "crashLocation1","crashLocation2".
+```{r echo=TRUE,cache=TRUE,warning=FALSE}
+#clean data
+
+columns_to_drop <- c("X","Y","OBJECTID","areaUnitID","crashDirectionDescription","","crashDistance","tlaId","tlaName",
+"crashFinancialYear","fatalCount","debris","meshblockId","northing","easting","objectThrownOrDropped","minorInjuryCount","crashLocation1","crashLocation2","directionRoleDescription",
+"otherObject","phoneBoxEtc","seriousInjuryCount")
+```
+
+Then drop columns that almost all values are Null(more then 99% of the data is null). columns like these useless for the inference. the column names are crashRoadSideRoad" and "intersection".    
+
+```{r echo=TRUE,cache=TRUE,warning=FALSE}
+data <- select(data, -one_of(columns_to_drop))
+
+na_percentage <- colMeans(is.na(data))
+columns_with_high_na <- names(na_percentage[na_percentage > 0.99])
+#print(columns_with_high_na)
+
+data <- data %>% select(-columns_with_high_na)
+
+#table(data$crashSeverity)
+```
+
+Define crashSeverity == "Fatal Crash" and crashSeverity == "Serious Crash" as severe crashes given numeric value 1,    
+Define crashSeverity == "Minor Crash" | crashSeverity == "Non-Injury Crash" as not severe crashes given numeric value 0.  
+The "crashSeverity" Label will be the target label.     
+
+```{r echo=TRUE,cache=TRUE,warning=FALSE}
+data <- data %>%
+  mutate(crashSeverity = ifelse(crashSeverity == "Fatal Crash" | crashSeverity == "Serious Crash", 1,
+                      ifelse(crashSeverity == "Minor Crash" | crashSeverity == "Non-Injury Crash", 0,
+                             2))) %>%  filter(crashSeverity != 2)
+
+#table(data$crashSeverity)
+#table(data$weatherA)
+#table(data$weatherB)
+```
+
+
+Attributes "weatherA" and "weatherB", are String values could be treated as factors, the Null value or String "None" are replaced as "Other" condition,
+not too many factors in each attribute, and the combinations also not too many factors but  are more sensitive to understand the whole weather situation. In my opinion, these two could be combined as one attribute "weather",much easier to display and dealing with it later. 
+
+```{r echo=TRUE,cache=TRUE,warning=FALSE}
+data$weatherA <- ifelse(data$weatherA %in% c("None", "Null"), "Other", data$weatherA)
+data$weatherB<- ifelse(data$weatherB %in% c("None", "Null"), "", data$weatherB)
+
+data <- data %>% unite(weatherA,weatherB,col=weather,sep=" ")
+```
+
+Replace the "","Null","None" value in region with "Other",replace the "" in other character attributes with "others".
+
+
+```{r echo=TRUE,cache=TRUE,warning=FALSE}
+table(data$region)
+
+data$region <- ifelse(data$region %in% c("None", "Null"), "Other", data$region)
+
+na_columns <- sapply(data, function(x) any(is.na(x)))
+
+columns_with_na <- names(data)[na_columns]
+#print(columns_with_na)
+
+data <- data %>%
+  mutate_at(vars(one_of(columns_with_na)), ~replace_na(., 0))
+
+
+processed_data <- data
+processed_data[processed_data == ""] <- "others"
+
+processed_data[] <- lapply(processed_data, function(x) as.factor(x))
+data <- processed_data
+
+rm(processed_data)
+
+#glimpse(data)
+
+```

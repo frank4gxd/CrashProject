@@ -44,7 +44,7 @@ dim(data)
 
 ```
 
-We load the data from csv flie. The dataset we got have 72 columns,and 821744 rows.The first things we can do is to drop columns not related to our objective.Thus, we select following columns by common sense of mine(not sure if 100% correct,maybe need some hint from Lisa Chen).There are also have some description columns, that is long string values to desript an event or street name. That looks no sense,should drop them too. Like "crashLocation1","crashLocation2".Than drop columns with almost all values are Null,that is crashRoadSideRoad" "intersection".    
+We load the data from csv flie. The dataset we got have 72 columns,and 821744 rows.The first things we can do is to drop columns not related to our objective.Thus, we select following columns by common sense of mine(not sure if 100% correct,maybe need some hint from Lisa Chen).There are also have some description columns, that is long string values to desript an event or street name. That looks no sxense,should drop them too. Like "crashLocation1","crashLocation2".Than drop columns with almost all values are Null,that is crashRoadSideRoad" "intersection".    
 Define crashSeverity == "Fatal Crash" and crashSeverity == "Serious Crash" as severe crashes given numeric value 1,    
 Define crashSeverity == "Minor Crash" | crashSeverity == "Non-Injury Crash" as not severe crashes given numeric value 0.  
 The "crashSeverity" Label will be the target label.     
@@ -61,7 +61,7 @@ List all the attributes with Na value:
  "schoolBus"           "slipOrFlood"         "speedLimit"          "strayAnimal"         "suv"                      
  "taxi"                "temporarySpeedLimit" "trafficIsland"       "trafficSign"         "train"                  
  "tree"                "truck"               "unknownVehicleType"  "vanOrUtility"        "vehicle"                
-     "waterRiver"     
+ "waterRiver"     
 They are all numberic, and fill with 0 is reasonable.    
 
 

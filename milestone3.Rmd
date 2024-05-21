@@ -1,7 +1,7 @@
 ---
-title: "milestone3"
+title: "milestone4"
 author: "Frank Guo"
-date: "2024-05-03"
+date: "2024-05-21"
 output: pdf_document
 ---
 
@@ -24,12 +24,11 @@ The data includes crash datas from 2000 to 2023.
 
 ## 3. Data Processing.   
 
-
-```{r echo=TRUE,cache=TRUE}
+We load the data from csv flie. The dataset we got have 72 columns,and 821744 rows.
+```{r echo=FALSE,cache=TRUE}
 #load data
 
 library(tidyverse)
-library(xgboost)
 
 #file_path <- file.choose()
 set.seed(230)
@@ -39,30 +38,27 @@ dim(data)
 #glimpse(data)
 
 ```
+    
+    
+The first things we can do is to drop columns not related to our objective.Thus, we select following columns by common sense of mine.There are also have some description columns, that is long string values to desript an event or street name. That looks no sense,should drop them too. Like "crashLocation1","crashLocation2", the detailed location of crash is too sparse, We just keep region instead.    
 
-We load the data from csv flie. The dataset we got have 72 columns,and 821744 rows.
+Also, the column like "minorInjuryCount","seriousInjuryCount","fatalCount", they are highly related to define if the crash is severe. It is not superised that you will get more than 99% accuracy in prediction if these features are included. We will remove these columns too.    
 
+Compared crashYear with crashFinancialYear, there are as same as in mathematic, but the crashFinancialYear is more related to the domain business. So the crashFinalcialYear is kept.
 
+All the descriptions of attributes will be listed in appendix.
 
-
-
-
-The whole dataset looks categorical.So we convert all attributes in to categorical attributes. 
-
-
-The first things we can do is to drop columns not related to our objective.Thus, we select following columns by common sense of mine(not sure if 100% correct,maybe need some hint from Lisa Chen).There are also have some description columns, that is long string values to desript an event or street name. That looks no sense,should drop them too. Like "crashLocation1","crashLocation2".
 ```{r echo=TRUE,cache=TRUE,warning=FALSE}
 #clean data
-
-columns_to_drop <- c("X","Y","OBJECTID","areaUnitID","crashDirectionDescription","","crashDistance","tlaId","tlaName",
-"crashFinancialYear","fatalCount","debris","meshblockId","northing","easting","objectThrownOrDropped","minorInjuryCount","crashLocation1","crashLocation2","directionRoleDescription",
-"otherObject","phoneBoxEtc","seriousInjuryCount")
+columns_to_drop <- c("X","Y","OBJECTID","areaUnitID","crashDirectionDescription","","crashDistance","tlaId","tlaName","debris","meshblockId","northing","easting","crashLocation1","crashLocation2","directionRoleDescription","crashSHDescription","otherObject","phoneBoxEtc","minorInjuryCount","seriousInjuryCount","fatalCount","crashYear","objectThrownOrDropped")
+##,"minorInjuryCount","seriousInjuryCount","fatalCount","objectThrownOrDropped","taxi","crashFinancialYear","carStationWagon"
+data <- select(data, -one_of(columns_to_drop))
 ```
 
-Then drop columns that almost all values are Null(more then 99% of the data is null). columns like these useless for the inference. the column names are crashRoadSideRoad" and "intersection".    
+
+Then dropping columns that all values are almost Null(more then 99% of the data is null). Columns like these are too sparse. The column names are crashRoadSideRoad" and "intersection".    
 
 ```{r echo=TRUE,cache=TRUE,warning=FALSE}
-data <- select(data, -one_of(columns_to_drop))
 
 na_percentage <- colMeans(is.na(data))
 columns_with_high_na <- names(na_percentage[na_percentage > 0.99])
@@ -71,59 +67,804 @@ columns_with_high_na <- names(na_percentage[na_percentage > 0.99])
 data <- data %>% select(-columns_with_high_na)
 
 #table(data$crashSeverity)
+
 ```
 
-Define crashSeverity == "Fatal Crash" and crashSeverity == "Serious Crash" as severe crashes given numeric value 1,    
-Define crashSeverity == "Minor Crash" | crashSeverity == "Non-Injury Crash" as not severe crashes given numeric value 0.  
+Define crashSeverity == "Fatal Crash" and crashSeverity == "Serious Crash" as severe crashes given numeric value 1,     
+
+Define crashSeverity == "Minor Crash" | crashSeverity == "Non-Injury Crash" as not severe crashes given numeric value 0.     
+
 The "crashSeverity" Label will be the target label.     
 
+
 ```{r echo=TRUE,cache=TRUE,warning=FALSE}
+
+table(data$crashSeverity)
+
 data <- data %>%
   mutate(crashSeverity = ifelse(crashSeverity == "Fatal Crash" | crashSeverity == "Serious Crash", 1,
                       ifelse(crashSeverity == "Minor Crash" | crashSeverity == "Non-Injury Crash", 0,
                              2))) %>%  filter(crashSeverity != 2)
+table(data$crashSeverity)
+```
 
-#table(data$crashSeverity)
-#table(data$weatherA)
-#table(data$weatherB)
+There are 767290 regular crashes and  54454 severe crashes.  Our target is to find the cause of severe crashes,but the severe observations' size is really small compares to the regular crashes. So we can't  use the whole dataset directly, it will overfit the majority(regular crashes) and underfit the minority(severe crashes), cause bias to majority,loss the importance information for our target(server crashes) inference.    
+
+
+```{r echo=FALSE,cache=TRUE,warning=FALSE,fig.width=5, fig.height=3}
+library(ggplot2)
+
+#unbalanced target Label
+#knitr::kable(table(data$crashSeverity))
+ggplot(data, aes(x = crashSeverity)) +
+ geom_bar(fill = "blue") +
+labs(title = "Histogram of crashes", x = "crashSeverity", y = "Frequency")
+
 ```
 
 
-Attributes "weatherA" and "weatherB", are String values could be treated as factors, the Null value or String "None" are replaced as "Other" condition,
-not too many factors in each attribute, and the combinations also not too many factors but  are more sensitive to understand the whole weather situation. In my opinion, these two could be combined as one attribute "weather",much easier to display and dealing with it later. 
+Attributes "weatherA" and "weatherB", are String values could be treated as factors,not too many factors in each attribute, and the combinations also not too many factors but  are more sensitive to understand the whole weather situation. In my opinion, these two could be combined as one attribute "weather",much easier to display and dealing with it later.    
+
+The Na value or String "None" are replaced as "Others" condition,
 
 ```{r echo=TRUE,cache=TRUE,warning=FALSE}
-data$weatherA <- ifelse(data$weatherA %in% c("None", "Null"), "Other", data$weatherA)
+
+table(data$weatherA)
+table(data$weatherB)
+data$weatherA <- ifelse(data$weatherA %in% c("None", "Null"), "Others", data$weatherA)
 data$weatherB<- ifelse(data$weatherB %in% c("None", "Null"), "", data$weatherB)
 
 data <- data %>% unite(weatherA,weatherB,col=weather,sep=" ")
+table(data$weather)
+
 ```
 
-Replace the "","Null","None" value in region with "Other",replace the "" in other character attributes with "others".
+
+Replace the "","Null","None" value in region with "Others";    
+
+Replace the "" in other character attributes with "Others".
 
 
 ```{r echo=TRUE,cache=TRUE,warning=FALSE}
-table(data$region)
+#knitr::kable(table(data$region))
 
-data$region <- ifelse(data$region %in% c("None", "Null"), "Other", data$region)
+data$region <- ifelse(data$region %in% c("None", "Null"), "Others", data$region)
+
+data[data == ""] <- "Others"
+```
+
+List all the attributes with Na value(in Appendix).    
+
+According the descriptions of these attributes, we can use 0 to fill na value.Here is 2 examples about why 0 be used:   
+
+For "advisorySpeed" or "temporarySpeedLimit" attribute, the value is mean special speed limitation applied or advised in the road which is involed in the crash. use 0 here means no special speed limit applied(according the rode code, that is open road.follows open road speed limit).    
+
+For other attributes in the list upon, the value indicates the number of items involved in the crash. the Na value means no item(named by attribute name) is involved,that equals to 0.    
+
+
+At the end, all the Na or missing data is imputated and remedied.
+
+```{r echo=TRUE,cache=TRUE,warning=FALSE}
 
 na_columns <- sapply(data, function(x) any(is.na(x)))
-
 columns_with_na <- names(data)[na_columns]
+
 #print(columns_with_na)
 
 data <- data %>%
   mutate_at(vars(one_of(columns_with_na)), ~replace_na(., 0))
 
-
-processed_data <- data
-processed_data[processed_data == ""] <- "others"
-
-processed_data[] <- lapply(processed_data, function(x) as.factor(x))
-data <- processed_data
-
-rm(processed_data)
-
 #glimpse(data)
 
 ```
+
+
+
+```{r echo=FALSE,cache=TRUE,warning=FALSE,fig.width=6, fig.height=4}
+#data[] <- lapply(data, function(x) as.factor(x))
+data$crashSeverity <- as.factor(data$crashSeverity)
+
+group_by_fyear <- data %>% group_by(crashFinancialYear,crashSeverity) %>% summarise(count=n(),.groups="keep")
+
+ggplot(group_by_fyear, aes(x = crashFinancialYear, y = count, fill = crashSeverity)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Comparison of crashes by financial year", x = "financial year", y = "count")+
+  theme(axis.text.x = element_text(angle = 45, hjust =1))
+ # facet_wrap(~crashYear,nrow=3)
+```
+Comparing the crashes by region, Auckland region looks obviously high than others, considering of population density, it looks reasonable.While the ratio of severe crashes looks low. While regions like Gisbone,northland, southland, hawkesbay and westcoast looks has much hight ratio of severe crashes.     
+
+```{r echo=FALSE,cache=TRUE,warning=FALSE,fig.width=6, fig.height=4}
+ggplot(group_by_region, aes(x = region, y = count, fill = crashSeverity)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Comparison of crashes by region", x = "region", y = "count") +
+  theme(axis.text.x = element_text(angle = 45, hjust =1))
+```
+
+#### Most of crashes happen in fine weather. If we skip the fine weather stuation. It is clear that the light rain weather looks notable too. While the Chi-test also tells that it is related to crashes.
+
+```{r echo=FALSE,cache=TRUE,warning=FALSE,fig.width=6, fig.height=4}
+group_by_weather <- data %>% filter(trimws(weather) != "Fine") %>% group_by(weather,crashSeverity) %>% summarise(count=n(),.groups="keep") 
+
+ggplot(group_by_weather, aes(x = weather, y = count, fill = crashSeverity)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Weather Conditions", x = "Weather Type", y = "Frequency") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+chisq_test <- chisq.test(table(data$weather, data$crashSeverity))
+print(chisq_test)
+```
+
+#### Crashes happened all the light situation,the number of severe crashes looks almost the same in sunny ,dark or overcast.While in dark or twilight,the severe crashes ratio looks higher.     
+
+```{r echo=FALSE,cache=TRUE,warning=FALSE,fig.width=6, fig.height=4}
+group_by_light <- data %>% group_by(light,crashSeverity) %>% summarise(count=n(),.groups="keep") 
+ggplot(group_by_light, aes(x = light, y = count, fill = crashSeverity)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "light Conditions", x = "light Type", y = "Frequency") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+  #facet_wrap(~region,nrow=6)
+chisq_test <- chisq.test(table(data$light, data$crashSeverity))
+print(chisq_test)
+```
+
+#### If we chech the crashes happened in holidays, it shows that Christmas New Year have higher crashes numbers and severe crashes. The severe crashes in other holidays are almost the same.     
+
+```{r echo=FALSE,cache=TRUE,warning=FALSE,fig.width=6, fig.height=4}
+group_by_holiday <- data %>% filter(holiday!='Others') %>% group_by(holiday,crashSeverity) %>% summarise(count=n(),.groups="keep") 
+
+ggplot(group_by_holiday, aes(x = holiday, y = count, fill = crashSeverity)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "holiday ", x = "holiday Type", y = "Frequency") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+# Chi-square test for Sepal Length Category and Species
+chisq_test <- chisq.test(table(data$holiday, data$crashSeverity))
+print(chisq_test)
+
+
+#rm(data)
+```
+#### Most of crashes happened under speedlimit 50, while speed limitation 100, also with high rate of crashes.By Chisq-test, also can tell that this attribut is related to crashes.
+
+```{r echo=FALSE,cache=TRUE,warning=FALSE,fig.width=6, fig.height=4}
+
+group_by_speed <- data %>% group_by(speedLimit,crashSeverity) %>% 
+            summarise(count=n(), .groups = "keep")
+
+
+ggplot(group_by_speed, aes(x = speedLimit, y = count, fill = crashSeverity)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "speedLimit ", x = "speedLimit ", y = "Frequency") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+# Chi-square test for Sepal Length Category and Species
+chisq_test <- chisq.test(table(data$speedLimit, data$crashSeverity))
+print(chisq_test)
+
+#rm(data)
+```
+
+##### From the plot, we can tell that more bicycles involed in craches, more likly the crash to be a severe crash.
+
+```{r echo=FALSE,cache=TRUE,warning=FALSE,fig.width=6, fig.height=4}
+
+ggplot(data = data %>% filter(bicycle>1), aes(x = bicycle, y = crashSeverity)) +
+  geom_jitter() +
+  labs(title = "Scatter Plot of bicycle vs. crashSeverity",
+       x = "bicycle",
+       y = "crashSeverity")
+
+#rm(data)
+group_by_bicycle <- data %>% filter(bicycle>1) %>% group_by(bicycle,crashSeverity) %>% 
+            summarise(count=n(), .groups = "keep")
+
+
+ggplot(group_by_bicycle, aes(x = bicycle, y = count, fill = crashSeverity)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "bicycle ", x = "bicycle ", y = "Frequency") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+
+```
+
+#### As same as bicycles, from the bar plot, more pedestrians involved in the crash, the crash is more likely to be a several crash.
+
+```{r echo=FALSE,cache=TRUE,warning=FALSE,fig.width=6, fig.height=4}
+
+ggplot(data = data %>% filter(pedestrian>0), aes(x = pedestrian, y = crashSeverity)) +
+  geom_jitter() +
+  labs(title = "Scatter Plot of pedestrian vs. crashSeverity",
+       x = "pedestrian",
+       y = "crashSeverity")
+
+#rm(data)
+group_by_pedestrian <- data %>% filter(pedestrian>0) %>% group_by(pedestrian,crashSeverity) %>% 
+            summarise(count=n(), .groups = "keep")
+
+
+ggplot(group_by_pedestrian, aes(x = pedestrian, y = count, fill = crashSeverity)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "pedestrian ", x = "pedestrian ", y = "Frequency") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+
+```
+
+#### From the bar plot, we can see that the carStationWagon type of car is the most related car type in crashes. By chi-test, it shows strong relations with crashes.
+
+```{r echo=FALSE,cache=TRUE,warning=FALSE,fig.width=6, fig.height=4}
+# Assuming df is your data frame and attr1, attr2, attr3 are the attributes
+carStationWagon <- sum(data$carStationWagon, na.rm = TRUE)
+otherVehicleType <- sum(data$otherVehicleType, na.rm = TRUE)
+suv <- sum(data$suv, na.rm = TRUE)
+truck <- sum(data$truck, na.rm = TRUE)
+vanOrUtility <- sum(data$vanOrUtility, na.rm = TRUE)
+
+
+# Create a new data frame
+df_sum <- data.frame(Attribute = c("carStationWagon", "otherVehicleType", "suv","truck","vanOrUtility"),
+                     Sum = c(carStationWagon, otherVehicleType, suv,truck,vanOrUtility))
+
+# Load the ggplot2 package
+library(ggplot2)
+
+# Create a bar plot
+ggplot(df_sum, aes(x = Attribute, y = Sum)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  theme_minimal() +
+  labs(x = "Attribute", y = "Sum", title = "Comparison of attribute sums")
+
+# Chi-square test for Sepal Length Category and Species
+chisq_test <- chisq.test(table(data$carStationWagon, data$crashSeverity))
+print(chisq_test)
+
+```
+
+
+```{r echo=FALSE,cache=TRUE,warning=FALSE,fig.width=6, fig.height=4}
+
+# ggplot(data = data, aes(x = fatalCount, y = crashSeverity)) +
+#   geom_jitter() +
+#   labs(title = "Scatter Plot of fatalCount vs. crashSeverity",
+#        x = "fatalCount",
+#        y = "crashSeverity")
+# 
+# #rm(data)
+```
+```{r echo=FALSE,cache=TRUE,warning=FALSE,fig.width=6, fig.height=4}
+
+# ggplot(data = data, aes(x = taxi, y = crashSeverity)) +
+#   geom_jitter() +
+#   labs(title = "Scatter Plot of taxi vs. crashSeverity",
+#        x = "taxi",
+#        y = "crashSeverity")
+# 
+# #rm(data)
+```
+
+```{r echo=FALSE,cache=TRUE,warning=FALSE,fig.width=6, fig.height=4}
+
+# ggplot(data = data, aes(x = bicycle, y = crashSeverity)) +
+#   geom_jitter() +
+#   labs(title = "Scatter Plot of bicycle vs. crashSeverity",
+#        x = "bicycle",
+#        y = "crashSeverity")
+# 
+# #rm(data)
+```
+
+
+#### As we can see from the Plot and chi-test, should have some relation between the temporary speed limit with crash severity, espcially when temp speed limit is 50.
+
+
+```{r echo=FALSE,cache=TRUE,warning=FALSE,fig.width=6, fig.height=4}
+
+ggplot(data = data %>% filter(temporarySpeedLimit>0), aes(x = temporarySpeedLimit, y = crashSeverity)) +
+  geom_jitter() +
+  labs(title = "Scatter Plot of temporarySpeedLimit vs. crashSeverity",
+       x = "temporarySpeedLimit",
+       y = "crashSeverity")
+
+#rm(data)
+group_by_temporarySpeedLimit <- data %>% filter(temporarySpeedLimit>0) %>% group_by(temporarySpeedLimit,crashSeverity) %>% 
+            summarise(count=n(), .groups = "keep")
+
+
+ggplot(group_by_temporarySpeedLimit, aes(x = temporarySpeedLimit, y = count, fill = crashSeverity)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "temporarySpeedLimit ", x = "temporarySpeedLimit ", y = "Frequency") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+# Chi-square test for Sepal Length Category and Species
+chisq_test <- chisq.test(table(data$temporarySpeedLimit, data$crashSeverity))
+print(chisq_test)
+
+
+```
+
+## 5. Analytical Plan
+
+Because of the unbalanc of the dataset. We decisied to equally bootstrap from severe crashes and regular crashes,that is 20000 observations from each.     
+
+```{r echo=FALSE,cache=TRUE,warning=FALSE,fig.width=6, fig.height=4}
+#sample data
+
+## balance sample
+# Split data by class
+
+class_data <- split(data, data$crashSeverity)
+
+# Determine desired sample size (e.g., proportionally to the original class distribution)
+desired_sample_size <- 20000  # Adjust as needed
+
+# Sample each class
+sampled_data <- lapply(class_data, function(class_subset) {
+  # Determine the sample size for this class
+  class_size <- nrow(class_subset)
+  class_sample_size <- min(class_size, desired_sample_size)
+
+  # Sample observations from this class
+  sampled_indices <- sample(1:class_size, size = class_sample_size, replace = FALSE)
+
+  # Return the sampled subset
+  return(class_subset[sampled_indices, ])
+})
+
+# Combine sampled subsets
+balanced_data <- do.call(rbind, sampled_data)
+##
+
+# try sample and smote, see what is the result
+# set.seed(230)  # for reproducibility
+# train_index <- sample(seq_len(nrow(data)), size = 0.7 * nrow(data))
+# train_data <- data[train_index, ]
+# test_data <- data[-train_index, ]
+# 
+# for (col in names(train_data)) {
+#   if (is.character(train_data[[col]])) {
+#     train_data[[col]] <- as.numeric(factor(train_data[[col]]))
+#   }
+# }
+# 
+# for (col in names(test_data)) {
+#   if (is.character(test_data[[col]])) {
+#     test_data[[col]] <- as.numeric(factor(test_data[[col]]))
+#   }
+# }
+# 
+# library(smotefamily)
+# 
+# # Separate features (X) and target variable (y) for training data
+# X_train <- train_data[, !(names(train_data) == "crashSeverity")]  # Features (all columns except the target)
+# y_train <- train_data$crashSeverity           # Target variable
+# 
+# # Separate features (X) and target variable (y) for testing data
+# X_test <- test_data[, !(names(test_data) == "crashSeverity")]    # Features (all columns except the target)
+# y_test <- test_data$crashSeverity              # Target variable
+# 
+# table(train_data$crashSeverity) 
+# # Apply SMOTE for oversampling
+# oversampled_data <- SMOTE(X = X_train, target = y_train)
+# 
+# # Convert oversampled data to data frame
+# oversampled_data_df <- as.data.frame(oversampled_data$data)
+# 
+# # Combine oversampled data with original data
+# combined_data <- cbind(oversampled_data_df, target = oversampled_data$crashSeverity)
+# table(combined_data$crashSeverity)
+
+```
+
+We will use 80% of the sample data as training data, and 20% of the sample data as test data.
+To fit the model, we will factorise the charactor attributes,and numberic them.
+
+```{r echo=FALSE,cache=TRUE,warning=FALSE}
+#prepare training and test data
+
+training_idx <- sample(nrow(balanced_data), nrow(balanced_data)*0.8)
+test_idx <-(1:nrow(balanced_data))[-training_idx] 
+
+training_data <- balanced_data[training_idx,]
+test_data <- balanced_data[test_idx,]
+
+
+for (col in names(training_data)) {
+  if (is.character(training_data[[col]])) {
+    training_data[[col]] <- as.numeric(factor(training_data[[col]]))
+  }
+}
+
+for (col in names(test_data)) {
+  if (is.character(test_data[[col]])) {
+    test_data[[col]] <- as.numeric(factor(test_data[[col]]))
+  }
+}
+
+#summary(training_data)
+```
+
+
+
+
+#### Fit logistic regression model.     
+
+using lr_model <- glm(crashSeverity ~ ., data = training_data, family = "binomial").  fit a logistic regression model with given training data, and predict using :
+predictions <- predict(lr_model, newdata = test_lr, type = "response") with sampled test_data.     
+
+Output accuracy and sorted first 15 importance of coefs.
+
+```{r echo=FALSE,cache=TRUE,warning=FALSE}
+library(caret)
+
+
+test_Y <- test_data$crashSeverity
+
+#test_X <- test_data %>% select(-crashSeverity)
+
+test_lr <- test_data
+#class_weights <- ifelse(training_data$crashSeverity == 1, 3, 1)  # Penalize severe crashes class more heavily
+
+lr_model <- glm(crashSeverity ~ ., data = training_data, family = "binomial")
+
+print(lr_model)
+predictions <- predict(lr_model, newdata = test_lr, type = "response")
+binary_predictions <- ifelse(predictions >= 0.5, 1, 0)
+accuracy <- mean(binary_predictions == test_Y)
+
+knitr::kable(table(binary_predictions,test_Y))
+
+print("Accuracy is:")
+print(accuracy)
+
+# Extract coefficients
+coefficients <- coef(lr_model)
+
+# Calculate absolute values of coefficients
+abs_coefficients <- abs(coefficients)
+
+# Create a dataframe to store coefficients and their absolute values
+coef_df <- data.frame(predictor = names(coefficients), coefficient = coefficients, abs_coefficient = abs_coefficients)
+
+# Sort coefficients based on absolute values
+sorted_coef_df <- coef_df[order(abs_coefficients, decreasing = TRUE), ]
+
+# Print sorted coefficients
+knitr::kable(head(sorted_coef_df,15))
+
+
+importance <- varImp(lr_model, scale = FALSE)
+print(importance)
+
+
+
+```
+
+
+```{r echo=FALSE,cache=TRUE,warning=FALSE}
+library(caret)
+
+
+test_Y <- test_data$crashSeverity
+
+#test_X <- test_data %>% select(-crashSeverity)
+
+test_lr <- test_data
+class_weights <- ifelse(training_data$crashSeverity == 1, 3, 1)  # Penalize severe crashes class more heavily
+
+lr_model <- glm(crashSeverity ~ ., data = training_data, weights=class_weights, family = "binomial")
+
+print(lr_model)
+predictions <- predict(lr_model, newdata = test_lr, type = "response")
+binary_predictions <- ifelse(predictions >= 0.5, 1, 0)
+accuracy <- mean(binary_predictions == test_Y)
+
+knitr::kable(table(binary_predictions,test_Y))
+
+print("Accuracy is:")
+print(accuracy)
+
+# Extract coefficients
+coefficients <- coef(lr_model)
+
+# Calculate absolute values of coefficients
+abs_coefficients <- abs(coefficients)
+
+# Create a dataframe to store coefficients and their absolute values
+coef_df <- data.frame(predictor = names(coefficients), coefficient = coefficients, abs_coefficient = abs_coefficients)
+
+# Sort coefficients based on absolute values
+sorted_coef_df <- coef_df[order(abs_coefficients, decreasing = TRUE), ]
+
+# Print sorted coefficients
+knitr::kable(head(sorted_coef_df,15))
+
+
+importance <- varImp(lr_model, scale = FALSE)
+print(importance)
+
+
+
+```
+
+
+```{r echo=FALSE,cache=TRUE,warning=FALSE,fig.width=6, fig.height=4}
+# Fit the logistic regression model
+#lr_model <- glm(crashSeverity ~ ., data = training_data, family = "binomial")
+
+# Get the summary of the model
+model_summary <- summary(lr_model)
+
+# Check if the summary object is correct
+print(model_summary)
+
+# Extract coefficients and p-values
+coefficients <- model_summary$coefficients
+p_values <- coefficients[, "Pr(>|z|)"]
+
+# Create a data frame with predictors and their p-values
+predictors_pvalues <- data.frame(
+  Predictor = rownames(coefficients),
+  P_Value = p_values
+)
+
+# Sort by p-value
+sorted_predictors <- predictors_pvalues %>%
+  arrange(P_Value)
+# Print sorted predictors by p-value
+print(sorted_predictors)
+
+```
+
+### fit decision tree model with random forest ensemble
+
+using rf_model <- ranger(crashSeverity ~ ., data = training_data,importance = "impurity") fit the training data with random forest.
+and predict using:
+predictions <- predict(rf_model, data = test_data).    
+
+Ouput the accuracy of predicted value for with sampled test_data.
+Then list the first 15 importance of attributes.
+
+
+```{r echo=FALSE,cache=TRUE,warning=FALSE}
+library(ranger)
+
+test_Y <- test_data$crashSeverity
+
+#test_X <- test_data %>% select(-crashSeverity)
+
+
+#rf_model <- ranger(crashSeverity ~ ., data = training_data,importance = "impurity")
+rf_model <- ranger(crashSeverity ~ ., data = training_data,importance = "impurity")
+
+#summary(rf_model)
+
+predictions <- predict(rf_model, data = test_data)
+
+predicted_values <- predictions$predictions
+knitr::kable(table(predicted_values,test_Y))
+
+accuracy <- mean(predicted_values == test_Y)
+
+print("Accuracy is:")
+print(accuracy)
+
+importance_measures <- importance(rf_model)
+
+#importance_df <-data.frame(name = names(importance_measures),value = unlist(importance_measures))
+importance_df <-data.frame(importance_measures)
+
+#glimpse(importance_df)
+sorted_importance_df <- importance_df[order(importance_df$importance_measures,decreasing = TRUE),,drop = FALSE]
+
+ knitr::kable(head(sorted_importance_df,15))
+ 
+rf_model2 <- ranger(crashSeverity ~ ., data = training_data,
+    num.trees = 500,
+    mtry = 6,
+    min.node.size = 3,
+    sample.fraction = 0.8,
+    seed = 230,
+  importance = "impurity"
+)
+
+predictions2 <- predict(rf_model2, data = test_data)
+
+predicted_values2 <- predictions2$predictions
+knitr::kable(table(predicted_values2,test_Y))
+
+accuracy <- mean(predicted_values2 == test_Y)
+
+print("Accuracy is:")
+print(accuracy)
+
+importance_measures2 <- importance(rf_model2)
+
+#importance_df <-data.frame(name = names(importance_measures),value = unlist(importance_measures))
+importance_df2 <-data.frame(importance_measures2)
+
+#glimpse(importance_df)
+sorted_importance_df2 <- importance_df2[order(importance_df2$importance_measures,decreasing = TRUE),,drop = FALSE]
+
+ knitr::kable(head(sorted_importance_df2,15))
+```
+## digging deeper in random forest
+
+```{r echo=FALSE,cache=TRUE,warning=FALSE}
+library(ranger)
+# Define class weights
+class_weights <- ifelse(training_data$crashSeverity == 1, 3, 1)  # Penalize 'setosa' class more heavily
+
+# Cross-validation with ranger
+cv_rf <- ranger(crashSeverity ~ ., data = training_data, num.trees = 500,    
+                   mtry = 6,
+                  min.node.size = 3, 
+                  case.weights = class_weights,
+                  importance = "impurity",
+                  sample.fraction = 0.8,
+                  num.fold = 5,  # Number of folds for cross-validation
+              verbose = TRUE  # Print progress
+        )
+
+# Get cross-validation results
+cv_results <- cv_rf$prediction.error
+
+print(cv_results)
+# Find the fold with the lowest prediction error
+#best_fold <- which.min(cv_results)
+
+# Get the corresponding model
+best_model <- cv_rf
+
+# Print information about the best model
+print(best_model)
+
+predictions <- predict(best_model, data = test_data)
+
+predicted_values <- predictions$predictions
+knitr::kable(table(predicted_values,test_Y))
+
+accuracy <- mean(predicted_values == test_Y)
+
+print("Accuracy is:")
+print(accuracy)
+
+importance_measures <- importance(best_model)
+
+#importance_df <-data.frame(name = names(importance_measures),value = unlist(importance_measures))
+importance_df <-data.frame(importance_measures)
+
+#glimpse(importance_df)
+sorted_importance_df <- importance_df[order(importance_df$importance_measures,decreasing = TRUE),,drop = FALSE]
+
+ knitr::kable(head(sorted_importance_df,15))
+```
+
+
+
+
+```{r echo=FALSE,cache=TRUE,warning=FALSE}
+library(xgboost)
+
+library(caret)
+
+test_Y <- test_data$crashSeverity
+test_Y <-  as.numeric(test_Y)-1
+test_X <- test_data %>% select(-crashSeverity)
+
+training_X <- training_data %>% select(-crashSeverity)
+
+training_Y <- training_data$crashSeverity
+
+#X <- as.matrix(training_X)  # Features
+training_Y <- as.numeric(training_Y)-1
+table(training_Y)
+
+class_weights <- ifelse(training_data$crashSeverity == 1,3, 1)  # Penalize 'setosa' class more heavily
+positive_weight <- sum(class_weights[training_Y == 1]) / sum(class_weights[training_Y == 0])
+
+# Train the XGBoost model
+xgb_model <- xgboost(data = as.matrix(training_X), label = training_Y,
+                     max_depth = 4, eta = 0.2, nrounds = 100, 
+                     scale_pos_weight = positive_weight,  # Set scale_pos_weight
+                     objective = "binary:logistic")
+
+# Predict probabilities
+predictions <- predict(xgb_model, as.matrix(test_X))  # Probability of positive class
+
+# Convert predictions to factor with levels "0" and "1"
+predictions <- factor(ifelse(predictions >= 0.5, 1, 0))
+
+# Convert test_Y to factor with levels "0" and "1"
+test_Y <- factor(test_Y)
+
+# Compute confusion matrix
+conf_matrix <- confusionMatrix(predictions, test_Y)
+print(conf_matrix)
+
+importance_scores <- xgb.importance(model = xgb_model)
+
+# Print the importance scores
+print(importance_scores)
+
+# Plot feature importance
+xgb.plot.importance(importance_matrix = importance_scores)
+```
+```{r echo=FALSE,cache=TRUE,warning=FALSE}
+# library(keras3)
+# library(caret)
+# test_Y <- test_data$crashSeverity
+# 
+# test_Y <-  as.numeric(test_Y)-1
+# 
+# test_X <- test_data %>% select(-crashSeverity)
+# 
+# training_X <- training_data %>% select(-crashSeverity)
+# 
+# training_Y <- training_data$crashSeverity
+# 
+# #X <- as.matrix(training_X)  # Features
+# training_Y <- as.numeric(training_Y)-1
+# 
+# X_train_matrix <- training_X %>% as.matrix() %>% scale() 
+# X_test_matrix <- test_X %>% as.matrix() %>% scale()
+# 
+# class_weights <- c("0" = 1, "1" = 3)
+# 
+# model <- keras_model_sequential() %>%
+# layer_dense(units = 64, activation = "relu", input_shape = dim(X_train_matrix)[[2]]) %>% 
+# layer_dense(units = 64, activation = "elu") %>% 
+# layer_dense(units = 1, activation = "sigmoid")
+# weighted_ratio <- class_weights["1"] / class_weights["0"]
+# 
+# # Compile the model with additional metrics
+# # Compile the model with precision, recall, and AUC metrics
+# model %>% compile(
+#   loss = 'binary_crossentropy',
+#   optimizer = optimizer_adam(),
+#   metrics = c('accuracy', metric_auc(), metric_precision(), metric_recall()),
+#   loss_weights = class_weights
+# )
+# 
+# # Train the model
+#  model %>% fit(X_train_matrix, training_Y, epochs = 40, batch_size = 400, validation_split = 0.2)
+# 
+# # Summary of the model
+# summary(model)
+# 
+# 
+# 
+# # Make predictions
+# predictions <- model %>% predict(X_test_matrix)
+# 
+# # Convert probabilities to binary class labels
+# predicted_classes <- ifelse(predictions > 0.5, 1, 0)
+# test_Y <- factor(test_Y, levels = c(0, 1))
+# 
+# # Evaluate predictions
+# conf_matrix <- confusionMatrix(factor(predicted_classes), test_Y)
+# print(conf_matrix)
+
+```
+
+**In summary,Logistic regression model and Random forest ensemble works well in this scenarios. Random forest ensemble has better predict accuracy,but not too much. The sorted importance of factors are different with two methods. The Logistic regression model looks more confident to interpret by choose coefs with P value < 0.05 significant level** 
+
+
+### Discussion.   
+
+Our target is about the minority value in target class, using cluster sampling  the Minority Class and the Minority Class to get equally sample size from original data set.    
+
+The Data provided not only unbalance in target class,but also very unbalance in predictors.It makes troubles when I try to factorise the attributes and fit a model. Logistic regression model and Random forest ensemble of decision based on ranger package looks good after convert all the predictor as numeric.
+
+### Appendix.   
+
+List all the attributes with Na value,got attributes below:      
+“advisorySpeed” “bicycle” “bridge” “bus” “carSta- tionWagon” “cliffBank” “ditch” “fence” “guardRail” “houseOrBuilding” “kerb” “moped” “motorcycle” “NumberOfLanes” “otherVehicleType” “overBank” “parkedVehicle” “pedestrian” “postOrPole” “roadworks” “schoolBus” “slipOrFlood” “speedLimit” “strayAnimal” “suv” “taxi” “temporarySpeedLimit” “trafficIsland” “trafficSign” “train” “tree” “truck” “unknownVehicleType” “vanOrUtility” “vehicle” “waterRiver”
+
+
